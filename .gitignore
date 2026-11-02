@@ -1,0 +1,21 @@
+# CodeVisionAVR / Proteus generated files
+*.cof
+*.obj
+*.o
+*.a
+*.al
+*.ol
+*.rom
+*.asm
+*.lst
+*.map
+*.str*
+*.sym*
+*.cbi
+*.cci
+*.cwp
+*.fct
+*~
+*.workspace
+Project Backups/
+Release/
