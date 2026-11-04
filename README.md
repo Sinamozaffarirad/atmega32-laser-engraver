@@ -1,29 +1,17 @@
-# ATmega32 Two-Axis Laser Engraver Controller
+# ATmega32 Two-Axis Laser Engraver
 
-Embedded firmware and Proteus simulation of a **2-axis (X/Y) laser engraving machine** built around an **ATmega32** microcontroller.
-The user defines up to five geometric shapes through a 4×4 keypad and a 128×64 graphic LCD; the firmware stores them in EEPROM, rasterizes them in integer/step space, and drives two stepper motors and a laser module to trace each shape, while mirroring the laser path on the GLCD in real time.
+My final project for the Microprocessors course at the University of Kashan (2023).
+Sina Mozaffari Rad.
 
-> **Final project of the Microprocessors course — University of Kashan (2023).**
-> Author: **Sina Mozaffari Rad**
+This is the controller for a small X/Y laser engraver, written in C for an ATmega32 and tested in a Proteus
+simulation. You enter up to five shapes with a 4×4 keypad and a 128×64 graphic LCD. The firmware saves them in
+EEPROM, turns each shape into motor steps, and drives two stepper motors and the laser to draw it. While the
+head moves, the same path is drawn on the LCD, so you can follow the job on the screen.
 
----
+Everything runs bare-metal on the 8-bit AVR at 8 MHz (CodeVisionAVR), with no RTOS. I control every peripheral
+through its registers.
 
-## Highlights
-
-- **Bare-metal C on an 8-bit AVR** (ATmega32 @ 8 MHz, CodeVisionAVR) — direct register-level control of every peripheral, no RTOS.
-- **Hardware/software co-design**: the same firmware image (`PROJECT.hex`) runs inside a full Proteus schematic with the MCU, steppers, H-bridge drivers, keypad, GLCD and laser.
-- **Classic rasterization algorithms implemented for motion control**, where each pixel is a physical motor step:
-  - **Bresenham's line algorithm** for lines,
-  - **Midpoint (Bresenham) circle algorithm** with 8-way octant symmetry for circles,
-  - **Parametric polar interpolation** (`atan2`, `sin`, `cos`) for circular sectors (arcs).
-- **Stepper sequencing in software**: per-axis phase tables for forward/reverse rotation, phase continuity across moves, and step timing derived from a user-configurable **RPM**.
-- **Non-volatile job storage**: shapes, work-table size and motor speed live in **EEPROM** and survive power cycles.
-- **Defensive input validation**: every shape is bounds-checked against the configured table size before the head moves (out-of-range points, radius overflow, degenerate rectangles).
-- **Menu-driven HMI** on a KS0108 GLCD with a scanned matrix keypad (row/column reversal technique, debounced by wait-for-release).
-
----
-
-## System Architecture
+## Hardware
 
 ```
                  ┌────────────────────────────┐
@@ -37,141 +25,131 @@ The user defines up to five geometric shapes through a 4×4 keypad and a 128×64
                  └────────────────────────────┘
 ```
 
-### Pin Map
-
-| Port / Pin | Direction | Function |
+| Port / pin | Direction | Function |
 |---|---|---|
 | `PORTA[7:0]` | Out | GLCD data bus DB0–DB7 |
 | `PB0` | Out | GLCD **E** |
 | `PB1` | Out | GLCD **RD/WR** |
 | `PB2` | Out | GLCD **RS** |
 | `PB3` | Out | GLCD **/RST** |
-| `PB4` / `PB5` | Out | GLCD **CS1** / **CS2** (two KS0108 halves) |
-| `PB7` | Out | Laser enable |
-| `PORTC[3:0]` / `PORTC[7:4]` | In/Out (swapped while scanning) | 4×4 keypad rows / columns |
-| `PORTD[3:0]` | Out | X-axis stepper coils (through L293D) |
-| `PORTD[7:4]` | Out | Y-axis stepper coils (through L293D) |
+| `PB4` / `PB5` | Out | GLCD **CS1** / **CS2** (the two KS0108 halves) |
+| `PB7` | Out | Laser on/off |
+| `PORTC[3:0]` / `PORTC[7:4]` | In/Out (swapped while scanning) | Keypad rows / columns |
+| `PORTD[3:0]` | Out | X stepper coils (through L293D) |
+| `PORTD[7:4]` | Out | Y stepper coils (through L293D) |
 
-GLCD controller configuration in CodeVisionAVR:
+GLCD settings in CodeVisionAVR:
 
 ![GLCD pin configuration](docs/glcd-pin-config.png)
 
-### Simulation Components (Proteus)
+In Proteus I used an `ATMEGA32`, a 128×64 GLCD with two KS0108 controllers, the `KEYPAD-SMALLCALC` keypad,
+two L293D H-bridges, two `BISTEPPER` motors, and a green LED in place of the laser.
 
-| Component | Proteus model | Role |
-|---|---|---|
-| Microcontroller | `ATMEGA32` | Main controller, runs `Debug/Exe/PROJECT.hex` |
-| Display | 128×64 GLCD with dual **KS0108** controllers | User interface + live laser-path preview |
-| Keypad | `KEYPAD-SMALLCALC` (4×4) | Data entry and navigation |
-| Motor drivers | **L293D** dual H-bridge (×2) | Coil drivers for the steppers |
-| Motors | `BISTEPPER` (×2) | X and Y axis actuators |
-| Laser | Green LED | Visual stand-in for the laser module |
+## How it works
 
----
+When it starts, the LCD asks for a mode:
 
-## Operating Modes
+**1. Job editor.** Shows the five shape slots. You pick one and either edit it or define a new shape:
 
-On power-up the GLCD asks for a mode (`1`–`3`):
-
-### Mode 1 — Job Editor
-Lists five shape slots (`not defined`, `line`, `rectangle`, `circle`, `circular sector`).
-Selecting a slot shows its stored parameters and allows editing; an empty slot goes straight to definition.
-
-| Shape | Parameters |
+| Shape | What you enter |
 |---|---|
 | Line | start `(x1, y1)`, end `(x2, y2)` |
-| Rectangle | opposite corners `(x1, y1)`, `(x2, y2)` |
-| Circle | center `(x, y)`, radius `r` |
-| Circular sector | center `(x, y)`, start point `(x1, y1)`, end point `(x2, y2)` |
+| Rectangle | two opposite corners |
+| Circle | center `(x, y)` and radius `r` |
+| Circular sector | center, start point and end point |
 
-### Mode 2 — Machine Configuration
-Displays and edits the **work-table size** (X × Y, default 128 × 64 to match the GLCD) and the **stepper speed in RPM** (default 60).
+**2. Machine settings.** Table size (default 128 × 64, the same as the LCD) and motor speed in RPM (default 60).
 
-### Mode 3 — Run Job
-Executes all defined shapes in order. For each shape the head performs a rapid move to the start point, the laser is enabled, and the contour is traced step by step. Every lit position is also drawn on the GLCD (`y` is flipped so the origin is at the bottom-left, like a machine table). Press **ON/C** to return to the menu.
-
-### Keypad Conventions
+**3. Run.** Draws all shapes in order. For each one the head moves to the start point, the laser turns on, and
+the shape is traced step by step. I flip `y` on the LCD so the origin is bottom-left, like on a real machine.
 
 | Key | Meaning |
 |---|---|
-| `0`–`9` | Digits / menu choices |
-| `=` | Confirm numeric entry |
-| `+` | Edit / Yes |
-| `−` | No / Edit RPM (in Mode 2) |
-| `ON/C` | Back / Exit current mode |
+| `0`–`9` | Digits and menu choices |
+| `=` | Confirm a number |
+| `+` | Edit / yes |
+| `−` | No, or edit RPM in mode 2 |
+| `ON/C` | Back / exit |
 
----
+Before moving, every shape is checked against the table size (points outside the table, a circle that is too
+big, a rectangle with zero width), so the head never tries to go out of range.
 
-## Implementation Details
+## Implementation notes
 
-### EEPROM Data Layout
+### Drawing shapes with motor steps
 
-All persistent state is a single `eeprom char data[38]` array:
+In this machine one motor step is one pixel, so I could use the classic raster graphics algorithms directly for
+motion:
 
-| Offset | Content |
-|---|---|
-| `7·i + 0` | Type of shape *i* (`0` = none, `1` line, `2` rectangle, `3` circle, `4` sector), *i* = 0…4 |
-| `7·i + 1 … 7·i + 6` | Up to six coordinate bytes for shape *i* |
-| `35` | Table width (X) |
-| `36` | Table height (Y) |
-| `37` | Stepper speed (RPM) |
+- **Line:** integer Bresenham. The axis with the bigger distance steps every time, and the error term decides
+  when the other axis steps. No floating point in the loop.
+- **Rectangle:** four straight edges, back to the start corner.
+- **Circle:** the midpoint circle algorithm (`d = 3 − 2r`). I compute only one eighth of the circle and visit
+  the other seven points by symmetry.
+- **Sector (arc):** the radius is the distance from the center to the start point, the angles come from
+  `atan2`, and I move in angle steps of `Δθ / (2πr)`, so two points are about one step apart. It works in
+  both directions.
 
-### Stepper Motor Control
+The head position (`xhead`, `yhead`) is kept in software. There are no encoders, so it is open-loop.
 
-Each axis uses a 4-entry coil-energizing table for each direction. Before a move, the firmware reads the current coil state back from `PORTD` to find its position in the sequence, so consecutive moves continue from the correct phase instead of jumping. Step timing is derived from the configured speed:
+### Stepper control
+
+Each axis has a 4-step coil table for each direction. If every move started the sequence from the first entry, the
+motor would jump at the start of each move. So before a move I read the current coil pattern back from
+`PORTD` and continue the sequence from there. The step delay comes from the
+RPM setting:
 
 ```
 ms_per_revolution = 60 000 / RPM
-ms_per_step       = ms_per_revolution / 4      (4 full steps per revolution model)
+ms_per_step       = ms_per_revolution / 4      (4 full steps per revolution in the model)
 ```
 
-One motor step corresponds to one unit in the table coordinate system (one GLCD pixel).
+### EEPROM layout
 
-### Shape Tracing
+Everything that must survive a power cut is in one array, `eeprom char data[38]`:
 
-- **Line** — integer Bresenham: the axis with the larger delta steps every iteration; the decision variable `p` decides when the minor axis steps. No floating point in the inner loop.
-- **Rectangle** — four axis-aligned edges traced in sequence, returning to the start corner.
-- **Circle** — midpoint circle algorithm (`d = 3 − 2r`); for each computed `(x, y)` the head visits all eight symmetric octant points around the center and returns, so only one eighth of the circle is actually computed.
-- **Circular sector** — radius is the distance from the center to the start point; start and end angles come from `atan2`, and the arc is sampled with an angular step of `Δθ / (2πr)` so consecutive samples are about one step apart. Works in both angular directions.
+| Offset | Content |
+|---|---|
+| `7·i + 0` | Shape type of slot *i* (`0` none, `1` line, `2` rectangle, `3` circle, `4` sector), *i* = 0…4 |
+| `7·i + 1 … 7·i + 6` | Up to six coordinate bytes |
+| `35` | Table width (X) |
+| `36` | Table height (Y) |
+| `37` | Motor speed (RPM) |
 
-The head position (`xhead`, `yhead`) is tracked in software (open-loop), and all moves are relative to it.
+### Keypad
 
----
+The keypad uses the row/column reversal method: I drive the rows and read the columns, then swap the
+directions and read again. Debouncing is just waiting until the key is released.
 
-## Repository Structure
+## What I would improve
+
+- Step timing uses blocking `delay_ms`, so the CPU does nothing else during a move. A timer interrupt for the
+  steps would be the right way.
+- No acceleration ramps or microstepping. A real motor with a load would probably lose steps at higher speed.
+- No limit switches, so there is no homing and no way to correct the position if a step is lost.
+- Jobs could come over USART (for example a small subset of G-code) instead of the keypad.
+
+## Files
 
 ```
 .
-├── PROJECT.c                 # Complete firmware source (CodeVisionAVR C)
-├── PROJECT.prj               # CodeVisionAVR project (chip, clock, GLCD & memory settings)
+├── PROJECT.c                 # All firmware source (CodeVisionAVR C)
+├── PROJECT.prj               # CodeVisionAVR project (chip, clock, GLCD and memory settings)
 ├── Debug/Exe/
-│   ├── PROJECT.hex           # Compiled flash image (loaded by the Proteus model)
+│   ├── PROJECT.hex           # Compiled firmware (Proteus loads this)
 │   └── PROJECT.eep           # EEPROM image
 ├── proteus/
-│   └── TEST_PROJECT.pdsprj   # Proteus schematic & simulation
+│   └── TEST_PROJECT.pdsprj   # Proteus schematic and simulation
 └── docs/
-    └── glcd-pin-config.png   # KS0108 control-pin configuration
+    └── glcd-pin-config.png   # KS0108 pin settings
 ```
 
-## Build and Simulate
+## Build and simulate
 
-**Requirements:** CodeVisionAVR 3.x, Proteus 8.x
+You need CodeVisionAVR 3.x and Proteus 8.x.
 
-1. Open `PROJECT.prj` in CodeVisionAVR and build (target: ATmega32, 8 MHz). The output goes to `Debug/Exe/PROJECT.hex`.
-2. Open `proteus/TEST_PROJECT.pdsprj` in Proteus. The ATmega32 is already linked to `..\Debug\Exe\PROJECT.hex` by relative path, so a prebuilt image works without recompiling.
-3. Start the simulation and use the on-screen keypad:
-   - Mode `2` → check/adjust table size and RPM,
-   - Mode `1` → define shapes,
-   - Mode `3` → run the job and watch the steppers, laser LED and GLCD trace.
-
-## Possible Extensions
-
-- Timer-interrupt-driven step generation instead of blocking `delay_ms`, freeing the CPU during motion.
-- Microstepping and acceleration/deceleration ramps.
-- Limit switches for homing and closed-loop position correction.
-- Receiving jobs over USART (e.g. a G-code subset) instead of keypad entry.
-
----
-
-**Course:** Microprocessors — University of Kashan
-**Tools:** C · AVR ATmega32 · CodeVisionAVR · Proteus 8
+1. Open `PROJECT.prj` in CodeVisionAVR and build it (ATmega32, 8 MHz). The output is `Debug/Exe/PROJECT.hex`.
+2. Open `proteus/TEST_PROJECT.pdsprj`. The ATmega32 already points to `..\Debug\Exe\PROJECT.hex`, so the
+   included build works without recompiling.
+3. Start the simulation: mode `2` to check the table size and speed, mode `1` to define shapes, and mode `3`
+   to run the job and watch the motors, the laser LED and the LCD.
