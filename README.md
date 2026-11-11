@@ -121,13 +121,11 @@ Everything that must survive a power cut is in one array, `eeprom char data[38]`
 The keypad uses the row/column reversal method: I drive the rows and read the columns, then swap the
 directions and read again. Debouncing is just waiting until the key is released.
 
-## What I would improve
+## What I plan to improve
 
 - Step timing uses blocking `delay_ms`, so the CPU does nothing else during a move. A timer interrupt for the
   steps would be the right way.
-- No acceleration ramps or microstepping. A real motor with a load would probably lose steps at higher speed.
-- No limit switches, so there is no homing and no way to correct the position if a step is lost.
-- Jobs could come over USART (for example a small subset of G-code) instead of the keypad.
+
 
 ## Files
 
